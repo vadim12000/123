@@ -64,7 +64,7 @@ def profile_settings():
         session['username'] = nickname
         session['token'] = token
         flash("Профиль успешно обновлен!")
-        return redirect(url_for('index'))  # Перенаправляем на главную страницу
+        return redirect(url_for('chat'))  # Перенаправляем на страницу чата
 
     # Если запрос GET, возвращаем страницу с настройками профиля
     return render_template('profile_settings.html', user=get_user_info(session['username']))
@@ -76,8 +76,9 @@ def get_user_info(username):
         cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
         return cursor.fetchone()
 
-@app.route('/')
-def index():
+@app.route('/chat')
+def chat():
+    """Страница чата"""
     if 'username' in session and 'token' in session:
         with sqlite3.connect("chat.db") as conn:
             cursor = conn.cursor()
@@ -127,7 +128,7 @@ def login():
                 session['username'] = username
                 session['token'] = user[4]  # Сохраняем токен пользователя в сессию
                 log_activity("Login", username, password, ip_address)  # Логируем успешный вход
-                return redirect(url_for('index'))  # Перенаправляем на страницу чата
+                return redirect(url_for('chat'))  # Перенаправляем на страницу чата
 
             log_activity("Failed login", username, password, ip_address)  # Логируем неудачный вход
             flash("Неверное имя пользователя или пароль!")
@@ -157,7 +158,7 @@ def register():
 
         log_activity("Registration", username, password, ip_address)  # Логируем регистрацию
         flash("Регистрация прошла успешно!")
-        return redirect(url_for('login'))
+        return redirect(url_for('chat'))  # Перенаправляем на страницу чата после регистрации
 
     return render_template('register.html')
 
