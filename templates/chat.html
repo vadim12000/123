@@ -3,86 +3,182 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Настройки профиля</title>
+    <title>Чат с голосовыми звонками</title>
     <style>
         body {
             font-family: Arial, sans-serif;
-            background-color: #f4f4f4;
+            background: #f4f4f4;
             margin: 0;
-            padding: 0;
             display: flex;
-            justify-content: center;
-            align-items: center;
+            flex-direction: column;
             height: 100vh;
         }
-        .profile-container {
-            background-color: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
-            width: 400px;
-            text-align: center;
-        }
-        .profile-container img {
-            width: 100px;
-            height: 100px;
-            border-radius: 50%;
-            margin-bottom: 10px;
-        }
-        .profile-container h2 {
-            margin: 10px 0;
-            color: #333;
-        }
-        .profile-container input[type="text"],
-        .profile-container textarea {
-            width: 100%;
+        .header {
+            background: #34495e;
+            color: white;
             padding: 10px;
-            margin-bottom: 15px;
-            border-radius: 4px;
-            border: 1px solid #ddd;
-            font-size: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
         }
-        .profile-container textarea {
-            height: 100px;
+        .container {
+            display: flex;
+            flex: 1;
         }
-        .profile-container button {
-            padding: 10px 20px;
-            background: #1abc9c;
+        .sidebar {
+            width: 20%;
+            background: #ecf0f1;
+            padding: 10px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+        .button {
+            padding: 10px 15px;
+            margin-bottom: 10px;
+            background: #3498db;
             color: white;
             border: none;
             border-radius: 4px;
             cursor: pointer;
-        }
-        .profile-container button:hover {
-            background: #16a085;
-        }
-        .profile-container a {
-            display: block;
-            margin-top: 10px;
-            color: #3498db;
+            text-align: center;
             text-decoration: none;
+            user-select: none;
         }
-        .profile-container a:hover {
-            text-decoration: underline;
+        .button:hover {
+            background: #2980b9;
+        }
+        .chat {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        .messages {
+            flex: 1;
+            padding: 10px;
+            overflow-y: auto;
+            background: white;
+        }
+        .messages p {
+            margin: 5px 0;
+            padding: 5px;
+            border-bottom: 1px solid #ddd;
+        }
+        .messages .username {
+            font-weight: bold;
+            cursor: pointer;
+            color: black;
         }
     </style>
 </head>
 <body>
-    <div class="profile-container">
-        <h2>Настройки профиля</h2>
-        <form method="POST" enctype="multipart/form-data">
-            <label for="avatar">Аватар</label>
-            <input type="file" id="avatar" name="avatar">
-            <br>
-            <label for="nickname">Ник</label>
-            <input type="text" id="nickname" name="nickname" value="{{ user[1] }}" required>
-            <br>
-            <label for="about_me">Обо мне</label>
-            <textarea id="about_me" name="about_me">{{ user[4] }}</textarea>
-            <br>
-            <button type="submit">Сохранить изменения</button>
-        </form>
-        <a href="/chat">Назад в чат</a>
+    <div class="header">
+        <span>Добро пожаловать, {{ user[1] }}</span>
+        <a href="/logout" style="color: white;">Выйти</a>
     </div>
+    <div class="container">
+        <div class="sidebar">
+            <h3>Друзья</h3>
+            {% for friend in friends %}
+            <button class="button" onclick="callUser('{{ friend }}')">Позвонить {{ friend }}</button>
+            {% endfor %}
+        </div>
+        <div class="chat">
+            <div class="messages" id="messages"></div>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+    <script>
+        const socket = io.connect();
+        let localStream;
+        let peerConnection;
+        const servers = {
+            iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+        };
+
+        function callUser(user) {
+            const room = `call_{{ user[1] }}_${user}`;
+            navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+                localStream = stream;
+                peerConnection = new RTCPeerConnection(servers);
+
+                localStream.getTracks().forEach((track) => {
+                    peerConnection.addTrack(track, localStream);
+                });
+
+                peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        socket.emit('ice_candidate', {
+                            candidate: event.candidate,
+                            room: room,
+                        });
+                    }
+                };
+
+                peerConnection.ontrack = (event) => {
+                    const audio = document.createElement('audio');
+                    audio.srcObject = event.streams[0];
+                    audio.autoplay = true;
+                    document.body.appendChild(audio);
+                };
+
+                peerConnection.createOffer().then((offer) => {
+                    peerConnection.setLocalDescription(offer);
+                    socket.emit('offer', { offer: offer, room: room });
+                });
+
+                socket.emit('call_user', { caller: "{{ user[1] }}", callee: user });
+            });
+        }
+
+        socket.on('incoming_call', (data) => {
+            const accept = confirm(`Входящий звонок от ${data.caller}. Принять?`);
+            if (accept) {
+                navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+                    localStream = stream;
+                    peerConnection = new RTCPeerConnection(servers);
+
+                    localStream.getTracks().forEach((track) => {
+                        peerConnection.addTrack(track, localStream);
+                    });
+
+                    peerConnection.onicecandidate = (event) => {
+                        if (event.candidate) {
+                            socket.emit('ice_candidate', {
+                                candidate: event.candidate,
+                                room: data.room,
+                            });
+                        }
+                    };
+
+                    peerConnection.ontrack = (event) => {
+                        const audio = document.createElement('audio');
+                        audio.srcObject = event.streams[0];
+                        audio.autoplay = true;
+                        document.body.appendChild(audio);
+                    });
+
+                    socket.emit('accept_call', { room: data.room });
+                });
+            }
+        });
+
+        socket.on('offer', (data) => {
+            peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+            peerConnection.createAnswer().then((answer) => {
+                peerConnection.setLocalDescription(answer);
+                socket.emit('answer', { answer: answer, room: data.room });
+            });
+        });
+
+        socket.on('answer', (data) => {
+            peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+        });
+
+        socket.on('ice_candidate', (data) => {
+            peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+        });
+    </script>
 </body>
 </html>
