@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Настройки профиля</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        .profile-container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+            width: 400px;
+            text-align: center;
+        }
+        .profile-container img {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            margin-bottom: 10px;
+        }
+        .profile-container h2 {
+            margin: 10px 0;
+            color: #333;
+        }
+        .profile-container input[type="text"],
+        .profile-container textarea {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            font-size: 16px;
+        }
+        .profile-container textarea {
+            height: 100px;
+        }
+        .profile-container button {
+            padding: 10px 20px;
+            background: #1abc9c;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .profile-container button:hover {
+            background: #16a085;
+        }
+        .profile-container a {
+            display: block;
+            margin-top: 10px;
+            color: #3498db;
+            text-decoration: none;
+        }
+        .profile-container a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="profile-container">
+        <h2>Настройки профиля</h2>
+        <form method="POST" enctype="multipart/form-data">
+            <label for="avatar">Аватар</label>
+            <input type="file" id="avatar" name="avatar">
+            <br>
+            <label for="nickname">Ник</label>
+            <input type="text" id="nickname" name="nickname" value="{{ user[1] }}" required>
+            <br>
+            <label for="about_me">Обо мне</label>
+            <textarea id="about_me" name="about_me">{{ user[4] }}</textarea>
+            <br>
+            <button type="submit">Сохранить изменения</button>
+        </form>
+        <a href="/chat">Назад в чат</a>
+    </div>
+</body>
+</html>
