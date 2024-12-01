@@ -1,95 +1,60 @@
 import os
-import random
-import string
 import sqlite3
-from flask import Flask, render_template, request, session, redirect, url_for, flash
+from flask import Flask, render_template, request, session, redirect, url_for, flash, jsonify
 from werkzeug.utils import secure_filename
-import socket
-from datetime import datetime
+from flask_socketio import SocketIO, emit, join_room, leave_room
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
 app.config['UPLOAD_FOLDER'] = 'static/uploads'
+socketio = SocketIO(app, cors_allowed_origins="*")
 
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def generate_avatar(nickname):
-    """Генерация случайного аватара с цветом и первой буквой имени"""
-    color = "#{:02x}{:02x}{:02x}".format(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
-    return f"static/avatar/{color}_{nickname[0].upper()}.png"
-
-def generate_token():
-    """Генерация случайной строки длиной 30 символов"""
-    return ''.join(random.choices(string.ascii_letters + string.digits, k=30))
-
-def log_activity(action, username, password, ip_address):
-    """Запись логов в файл"""
-    with open("user_activity.log", "a") as log_file:
-        log_file.write(f"{datetime.now()} - {action} - {username} - {password} - {ip_address}\n")
-
-@app.route('/profile_settings', methods=['GET', 'POST'])
-def profile_settings():
-    if 'username' not in session:
-        return redirect(url_for('login'))  # Если пользователь не авторизован, перенаправляем на страницу входа
-
-    if request.method == 'POST':  # Обработка отправки формы
-        nickname = request.form['nickname']
-        about_me = request.form['about_me']
-        avatar_file = request.files.get('avatar')  # Получаем файл аватара
-
-        # Если файл загружен и его расширение допустимо
-        if avatar_file and allowed_file(avatar_file.filename):
-            filename = secure_filename(avatar_file.filename)
-            avatar_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            avatar_file.save(avatar_path)
-        else:
-            # Если аватар не был загружен, генерируем случайный аватар
-            avatar_path = generate_avatar(nickname)
-
-        # Генерация уникального токена для пользователя
-        token = generate_token()
-
-        # Обновляем данные пользователя в базе данных
-        with sqlite3.connect("chat.db") as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE users SET username = ?, avatar = ?, status = ?, token = ? WHERE username = ?
-            """, (nickname, avatar_path, about_me, token, session['username']))
-            conn.commit()
-
-        # Обновляем сессию с новым ником и токеном
-        session['username'] = nickname
-        session['token'] = token
-        flash("Профиль успешно обновлен!")
-        return redirect(url_for('chat'))  # Перенаправляем на страницу чата
-
-    # Если запрос GET, возвращаем страницу с настройками профиля
-    return render_template('profile_settings.html', user=get_user_info(session['username']))
-
-def get_user_info(username):
-    """Функция для получения информации о пользователе из базы данных"""
+def init_db():
     with sqlite3.connect("chat.db") as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
-        return cursor.fetchone()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                avatar TEXT DEFAULT NULL,
+                status TEXT DEFAULT 'Онлайн'
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sender TEXT NOT NULL,
+                recipient TEXT NOT NULL,
+                message TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS friends (
+                user_id INTEGER NOT NULL,
+                friend_id INTEGER NOT NULL,
+                UNIQUE(user_id, friend_id),
+                FOREIGN KEY(user_id) REFERENCES users(id),
+                FOREIGN KEY(friend_id) REFERENCES users(id)
+            )
+        """)
+        conn.commit()
 
-@app.route('/chat')
-def chat():
-    """Страница чата"""
-    if 'username' in session and 'token' in session:
+
+init_db()
+
+
+@app.route('/')
+def index():
+    if 'username' in session:
         with sqlite3.connect("chat.db") as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM users WHERE username = ? AND token = ?", (session['username'], session['token']))
+            cursor.execute("SELECT * FROM users WHERE username = ?", (session['username'],))
             user = cursor.fetchone()
-
-            # Проверка токена
-            if user is None:
-                flash("Неверный токен доступа!")
-                return redirect(url_for('logout'))
-
             cursor.execute("""
                 SELECT users.username
                 FROM users
@@ -99,75 +64,107 @@ def chat():
                 )
             """, (session['username'],))
             friends = [row[0] for row in cursor.fetchall()]
-            cursor.execute("""
-                SELECT groups.name
-                FROM groups
-                JOIN group_members ON groups.id = group_members.group_id
-                WHERE group_members.user_id = (
-                    SELECT id FROM users WHERE username = ?
-                )
-            """, (session['username'],))
-            groups = [row[0] for row in cursor.fetchall()]
-        return render_template('chat.html', user=user, friends=friends, groups=groups)
+        return render_template('chat.html', user=user, friends=friends)
     return redirect(url_for('login'))
 
-# Страница для входа
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        ip_address = request.remote_addr  # Получаем IP-адрес пользователя
 
-        with sqlite3.connect("chat.db") as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM users WHERE username = ? AND password = ?", (username, password))
-            user = cursor.fetchone()
-
-            if user:
-                session['username'] = username
-                session['token'] = user[4]  # Сохраняем токен пользователя в сессию
-                log_activity("Login", username, password, ip_address)  # Логируем успешный вход
-                return redirect(url_for('chat'))  # Перенаправляем на страницу чата
-
-            log_activity("Failed login", username, password, ip_address)  # Логируем неудачный вход
-            flash("Неверное имя пользователя или пароль!")
-            return redirect(request.url)
-    return render_template('login.html')
-
-# Страница для регистрации
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-        ip_address = request.remote_addr  # Получаем IP-адрес пользователя
-
+        confirm_password = request.form['confirm_password']
+        if password != confirm_password:
+            flash("Пароли не совпадают!")
+            return redirect(request.url)
         with sqlite3.connect("chat.db") as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
-            user = cursor.fetchone()
-
-            if user:
-                flash("Пользователь с таким именем уже существует!")
+            try:
+                cursor.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, password))
+                conn.commit()
+                return redirect(url_for('login'))
+            except sqlite3.IntegrityError:
+                flash("Имя пользователя уже существует!")
                 return redirect(request.url)
-
-            cursor.execute("INSERT INTO users (username, password, token) VALUES (?, ?, ?)",
-                           (username, password, generate_token()))
-            conn.commit()
-
-        log_activity("Registration", username, password, ip_address)  # Логируем регистрацию
-        flash("Регистрация прошла успешно!")
-        return redirect(url_for('chat'))  # Перенаправляем на страницу чата после регистрации
-
     return render_template('register.html')
 
-# Выход из аккаунта
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        with sqlite3.connect("chat.db") as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM users WHERE username = ? AND password = ?", (username, password))
+            user = cursor.fetchone()
+            if user:
+                session['username'] = username
+                return redirect(url_for('index'))
+            flash("Неверное имя пользователя или пароль!")
+            return redirect(request.url)
+    return render_template('login.html')
+
+
 @app.route('/logout')
 def logout():
     session.pop('username', None)
-    session.pop('token', None)
     return redirect(url_for('login'))
 
+
+@socketio.on('join')
+def handle_join(data):
+    username = data['username']
+    room = data.get('room', 'vad')  # По умолчанию подключаем к "vad"
+    join_room(room)
+    emit('message', {'message': f'{username} присоединился к {room}!', 'room': room}, room=room)
+
+
+@socketio.on('send_message')
+def handle_send_message(data):
+    sender = data['sender']
+    message = data['message']
+    recipient = data.get('recipient')
+    room = data.get('room', 'vad')
+
+    # Сохраняем сообщение в базу данных
+    with sqlite3.connect("chat.db") as conn:
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO messages (sender, recipient, message) VALUES (?, ?, ?)", (sender, recipient, message))
+        conn.commit()
+
+    # Отправляем сообщение
+    emit('message', {'sender': sender, 'message': message, 'recipient': recipient, 'room': room}, room=room)
+
+
+@socketio.on('call_user')
+def handle_call_user(data):
+    caller = data['caller']
+    callee = data['callee']
+    emit('incoming_call', {'caller': caller}, to=callee)
+
+
+@socketio.on('accept_call')
+def handle_accept_call(data):
+    room = f"call_{data['caller']}_{data['callee']}"
+    join_room(room)
+    emit('call_accepted', {'room': room}, broadcast=True)
+
+
+@socketio.on('ice_candidate')
+def handle_ice_candidate(data):
+    emit('ice_candidate', data, to=data['room'])
+
+
+@socketio.on('offer')
+def handle_offer(data):
+    emit('offer', data, to=data['room'])
+
+
+@socketio.on('answer')
+def handle_answer(data):
+    emit('answer', data, to=data['room'])
+
+
 if __name__ == '__main__':
-    app.run(debug=True)
+    socketio.run(app, debug=True)
